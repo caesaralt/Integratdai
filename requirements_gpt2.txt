@@ -1,0 +1,5 @@
+flask
+openai>=1.40.0
+pillow
+PyPDF2
+pdf2image
