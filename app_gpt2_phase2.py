@@ -1,8 +1,9 @@
-# app_gpt2_phase2.py
-# Extends app_gpt2 with agentic endpoints: understand, route, export.
-import os, json, uuid, datetime, io, base64
-from flask import Flask, request, jsonify, send_from_directory
+# app_gpt2_phase2.py (FIXED)
+import os, json, uuid
+from flask import request, jsonify, send_from_directory
 from werkzeug.utils import secure_filename
+
+from app_gpt2 import app  # import the existing Flask app
 
 from agents.schema_gpt2 import FLOORPLAN_SCHEMA
 from agents.router_gpt2 import route_circuit, to_svg
@@ -21,7 +22,6 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUT_DIR, exist_ok=True)
 
 def _mock_floorplan():
-    # Safe fallback when no vision available
     return {
         "units":"mm","scale":1.0,
         "rooms":[{"id":"r1","name":"Room","polygon":[{"x":100,"y":100},{"x":500,"y":100},{"x":500,"y":400},{"x":100,"y":400}]}],
@@ -42,11 +42,9 @@ def plan_understand():
     path = os.path.join(UPLOAD_DIR, name)
     f.save(path)
 
-    # If OpenAI available, ask for structured outputs; otherwise mock.
+    # TODO: real vision with OpenAI Structured Outputs; fallback for now
     result = _mock_floorplan()
 
-    # TODO (phase 2b): use Files API + Responses JSON Schema to fill FLOORPLAN_SCHEMA
-    # Keep the shape identical either way.
     pid = str(uuid.uuid4())[:8]
     out_json = os.path.join(OUT_DIR, f"{pid}-floorplan.json")
     with open(out_json, "w") as fh:
@@ -58,14 +56,12 @@ def plan_understand():
 def plan_route():
     data = request.get_json(force=True)
     floorplan = data.get("floorplan") or _mock_floorplan()
-    # Pick a source: first panel or first switch
     panels = floorplan.get("panels") or []
     syms = floorplan.get("symbols") or []
     if not panels or not syms:
         return jsonify(success=False, error="Missing panels or symbols"), 400
 
     src = panels[0]["point"]
-    # route to all lights in the same room
     targets = [s["port"] for s in syms if s.get("type","").startswith("light")]
     circuits = route_circuit(src, targets, wire="14/2")
     markup = {"circuits": circuits, "symbols": syms}
@@ -78,3 +74,6 @@ def plan_route():
 @app.get("/phase2/download/<path:fname>")
 def phase2_download(fname):
     return send_from_directory(OUT_DIR, fname, as_attachment=False)
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
