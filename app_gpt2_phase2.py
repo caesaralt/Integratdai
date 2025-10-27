@@ -77,3 +77,6 @@ def phase2_download(fname):
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 5000)))
+
+# load protocol 3 page
+import app_gpt2_p3  # noqa
