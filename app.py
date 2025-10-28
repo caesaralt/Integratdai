@@ -168,6 +168,38 @@ def save_simpro_config(config):
     with open(SIMPRO_CONFIG_FILE, 'w') as f:
         json.dump(config, f, indent=2)
 
+
+def _ensure_parent_folder(path: str) -> None:
+    """Ensure the directory for a JSON file exists."""
+    folder = os.path.dirname(path)
+    if folder:
+        os.makedirs(folder, exist_ok=True)
+
+
+def load_json_file(path: str, default):
+    """Safely load JSON data from disk for CRM storage.
+
+    Falls back to the provided default when the file is missing or invalid.
+    """
+    _ensure_parent_folder(path)
+
+    if not os.path.exists(path):
+        return copy.deepcopy(default)
+
+    try:
+        with open(path, 'r') as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"⚠️  Failed to load JSON file {path}: {exc}")
+        return copy.deepcopy(default)
+
+
+def save_json_file(path: str, data) -> None:
+    """Persist JSON data to disk for CRM storage."""
+    _ensure_parent_folder(path)
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=2)
+
 # ============================================================================
 # AI ANALYSIS FUNCTIONS
 # ============================================================================
@@ -866,7 +898,7 @@ def generate_quote_pdf(costs, automation_data, project_name, tier, output_path):
     doc = SimpleDocTemplate(output_path, pagesize=letter)
     elements = []
     styles = getSampleStyleSheet()
-    
+
     title_style = ParagraphStyle(
         'CustomTitle',
         parent=styles['Heading1'],
@@ -928,7 +960,109 @@ def generate_quote_pdf(costs, automation_data, project_name, tier, output_path):
         ('TEXTCOLOR', (3, -1), (-1, -1), colors.white),
     ]))
     elements.append(quote_table)
-    
+
+    doc.build(elements)
+
+
+def create_quote_pdf(project_name, costs, placements, output_path, annotated_pdf_path):
+    """Create a final quote PDF that reflects user-adjusted placements."""
+    automation_data = load_data()
+    doc = SimpleDocTemplate(output_path, pagesize=letter)
+    elements = []
+    styles = getSampleStyleSheet()
+
+    title_style = ParagraphStyle(
+        'FinalQuoteTitle',
+        parent=styles['Heading1'],
+        fontSize=22,
+        textColor=colors.HexColor('#2F4F4F'),
+        alignment=1,
+        spaceAfter=18
+    )
+
+    company = automation_data.get('company_info', {})
+    company_name = company.get('name', 'Integratd Living')
+    elements.append(Paragraph(f"<b>{company_name}</b><br/>Final Proposal", title_style))
+    elements.append(Spacer(1, 0.2 * inch))
+
+    meta_table = Table([
+        ['Project', project_name],
+        ['Date', datetime.now().strftime('%Y-%m-%d')],
+        ['Summary PDF', annotated_pdf_path],
+        ['Prepared By', company.get('email', 'info@integratdliving.com.au')]
+    ], colWidths=[1.6 * inch, 4 * inch])
+    meta_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (0, -1), colors.HexColor('#2F4F4F')),
+        ('TEXTCOLOR', (0, 0), (0, -1), colors.white),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (-1, -1), 'Helvetica'),
+        ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 10),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 0.25, colors.grey)
+    ]))
+    elements.append(meta_table)
+    elements.append(Spacer(1, 0.25 * inch))
+
+    # Placement summary
+    summary_data = [['Automation Type', 'Devices Placed']]
+    for auto_type, entries in placements.items():
+        type_info = automation_data.get('automation_types', {}).get(auto_type, {})
+        label = type_info.get('name', auto_type.replace('_', ' ').title())
+        quantity = sum(item.get('quantity', 1) for item in entries)
+        summary_data.append([label, str(quantity)])
+
+    if len(summary_data) == 1:
+        summary_data.append(['No automation devices placed', '0'])
+
+    summary_table = Table(summary_data, colWidths=[3 * inch, 2 * inch])
+    summary_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2F4F4F')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey)
+    ]))
+    elements.append(Paragraph('<b>Placement Summary</b>', styles['Heading3']))
+    elements.append(summary_table)
+    elements.append(Spacer(1, 0.3 * inch))
+
+    # Cost breakdown
+    quote_data = [['Description', 'Qty', 'Unit Cost', 'Labor Hrs', 'Total']]
+    for item in costs.get('items', []):
+        quote_data.append([
+            item.get('type', 'Item'),
+            str(item.get('quantity', 0)),
+            f"${item.get('unit_cost', 0):.2f}",
+            f"{item.get('labor_hours', 0):.1f}",
+            f"${item.get('total', 0):.2f}"
+        ])
+
+    quote_data.append(['', '', '', 'Subtotal:', f"${costs.get('subtotal', 0):.2f}"])
+    markup_pct = automation_data.get('markup_percentage', 0)
+    quote_data.append(['', '', '', f'Markup ({markup_pct}%):', f"${costs.get('markup', 0):.2f}"])
+    quote_data.append(['', '', '', 'Grand Total:', f"${costs.get('grand_total', 0):.2f}"])
+
+    cost_table = Table(quote_data, colWidths=[2.5 * inch, 0.7 * inch, 1 * inch, 1 * inch, 1.3 * inch])
+    cost_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#556B2F')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('GRID', (0, 0), (-1, -4), 0.5, colors.grey),
+        ('BACKGROUND', (3, -1), (-1, -1), colors.HexColor('#556B2F')),
+        ('TEXTCOLOR', (3, -1), (-1, -1), colors.white),
+        ('FONTNAME', (3, -1), (-1, -1), 'Helvetica-Bold')
+    ]))
+    elements.append(Paragraph('<b>Investment Summary</b>', styles['Heading3']))
+    elements.append(cost_table)
+
+    elements.append(Spacer(1, 0.3 * inch))
+    elements.append(Paragraph(
+        "Annotated floor plan reference: <b>{}</b>".format(annotated_pdf_path),
+        styles['Normal']
+    ))
+
     doc.build(elements)
 
 # ============================================================================
